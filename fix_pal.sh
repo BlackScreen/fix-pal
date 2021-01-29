@@ -9,30 +9,24 @@
 # If interrupted with CTRL+C, do cleanup
 trap cleanup INT
 
+# Define the usage string
 USAGE="usage: $0 <infile> <outfile>"
 
-CORRECTION_FACTOR=25/24
+# Enter and calculate the correction factor
+CORRECTION_FACTOR="25025/24000"
 audio_factor=`bc -l <<< "1/($CORRECTION_FACTOR)"`
 
-# Validate args
-if [ $# -ne 2 ]; then
-	echo ${USAGE}
-	exit
-fi
+# Select language to keep (audio and subtitle tracks) in the output file
+# Example: "eng" for only english tracks, "" for all tracks from the source file
+LANGUAGE_SELECTION="eng"
 
-# Source & dest files
-infile="$1"
-outfile="$2"
-tmpdir="$(mktemp -d "${TMPDIR:-/var/tmp}/pal-XXXXXXXX")" # Thanks to James Ainslie
-tempfile="${tmpdir}/temp.mkv"
-
-# Clean up the temp directory
+# FUNCTION: Clean up the temp directory
 function cleanup {
 	echo "Cleaning up temp files..."
 	rm -rf "${tmpdir}" # Thanks to James Ainslie
 }
 
-# If a given file already exists, ask for confirmation before proceeding.
+# FUNCTION: If a given file already exists, ask for confirmation before proceeding.
 function confirm_overwrite {
 	local file="$1"
 	if [ -e "$file" ]; then
@@ -45,7 +39,7 @@ Do you want to overwrite it? [y|N] " yn
 	fi
 }
 
-# Read an arbitrary track file, and produce a new one with timings slowed down.
+# FUNCTION: Read an arbitrary track file, and produce a new one with timings slowed down.
 # This function modified slightly from code by James Ainslie from
 # <https://blog.delx.net.au/2016/05/fixing-pal-speedup-and-how-film-and-video-work/comment-page-1/#comment-100160>
 function edit_timings {
@@ -75,7 +69,7 @@ function edit_timings {
 	done < "$old_track_file"
 }
 
-# Pull out the chapter data, then generate a new chapter file with re-timed
+# FUNCTION: Pull out the chapter data, then generate a new chapter file with re-timed
 # chapters. This function modified slightly from code by James Ainslie from
 # <https://blog.delx.net.au/2016/05/fixing-pal-speedup-and-how-film-and-video-work/comment-page-1/#comment-100160>
 function fix_chapters {
@@ -92,11 +86,12 @@ function fix_chapters {
 	fi
 }
 
-# Get all tracks that AREN'T AUDIO (e.g. video and subtitle tracks), then build
+# FUNCTION: Get all tracks that AREN'T AUDIO (e.g. video and subtitle tracks), then build
 # the `--sync` string for a subsequent `mkvmerge` call.
 function get_sync_flags {
 	local file="$1"
 	syncstring=''
+
 	while IFS= read -r line || [[ -n $line ]]; do
 		local match=$(echo $line | grep 'Track ID' | grep -v 'audio' | cat)
 		if [ "$match" ]; then
@@ -106,7 +101,7 @@ function get_sync_flags {
 	done <<<"$(mkvmerge -i "$file")"
 }
 
-# Determine the sample rate for audio. If different tracks have different
+# FUNCTION: Determine the sample rate for audio. If different tracks have different
 # rates, chooses that of the first audio track.
 function get_audio_sample_rate {
 	local file="$1"
@@ -114,24 +109,89 @@ function get_audio_sample_rate {
 	audio_sample_rate=$(echo $sample_rates | egrep -o "[0-9]*\.[0-9]*")
 }
 
-# Alter the audio sample rate. Copy video, subtitles, chapters exactly as they
+# FUNCTION: Alter the audio sample rate. Copy video, subtitles, chapters exactly as they
 # are in the temp file.
 function fix_audio {
 	get_audio_sample_rate "$infile"
 
-	ffmpeg -y -i "$tempfile" -map 0 \
+	if [ $LANGUAGE_SELECTION != "" ]; then
+		audio_check=$(ffprobe -select_streams a -show_entries stream=index,codec_type:stream_tags=language -of compact "$infile" -v quiet | grep $LANGUAGE_SELECTION)
+		subtitle_check=$(ffprobe -select_streams s -show_entries stream=index,codec_type:stream_tags=language -of compact "$infile" -v quiet | grep $LANGUAGE_SELECTION)
+
+		if [ -z "$audio_check" ]; then
+        		audio_mapping=""
+		else
+        		audio_mapping="-map 0:a:m:language:$LANGUAGE_SELECTION"
+		fi
+
+		if [ -z "$subtitle_check" ]; then
+        		subtitle_mapping=""
+		else
+        		subtitle_mapping="-map 0:s:m:language:$LANGUAGE_SELECTION"
+		fi
+
+		FFMPEG_MAPPING="-map 0:v $audio_mapping $subtitle_mapping"
+	else
+		FFMPEG_MAPPING="-map 0"
+	fi
+
+	ffmpeg -y -i "$tempfile" $FFMPEG_MAPPING \
 	-filter:a "asetrate=${audio_sample_rate}*${audio_factor}" \
 	-c:v copy -c:s copy -c:a libvorbis -q:a 6 -max_interleave_delta 0 "$outfile"
 }
 
-confirm_overwrite "$outfile"
-fix_chapters
-get_sync_flags "$infile"
+# Validate args
+if [ $# == 1 ] && [ -d "$1" ]; then
+	# Loop through files in folder
+	for file in "$1"/*
+	do
+		# Source & dest files
+		infile="$(echo $file)"
+		outfile="${infile::-4} - FIXED.mkv"
+		tmpdir="$(mktemp -d "${TMPDIR:-/var/tmp}/pal-XXXXXXXX")" # Thanks to James Ainslie
+		tempfile="${tmpdir}/temp.mkv"
 
-# For each video track, adjust the framerate by the correction factor. (No
-# re-encoding necessary!) Adjust subtitle timings to match. Add the adjusted
-# chapters from the new chapter file. Write everything to a temp file.
-mkvmerge --output "$tempfile" $syncstring --no-chapters $chapter_string "$infile"
+		echo Input: "$infile"
+		echo Output: "$outfile"
+		echo
 
-fix_audio
-cleanup
+		# Start processing of the source file
+		confirm_overwrite "$outfile"
+		fix_chapters
+		get_sync_flags "$infile"
+
+		# For each video track, adjust the framerate by the correction factor. (No
+		# re-encoding necessary!) Adjust subtitle timings to match. Add the adjusted
+		# chapters from the new chapter file. Write everything to a temp file.
+		mkvmerge --output "$tempfile" $syncstring --no-chapters $chapter_string "$infile"
+
+		fix_audio
+		cleanup
+	done
+elif [ $# == 2 ] && [ -f "$1" ]; then
+	# Source & dest files
+	infile="$1"
+	outfile="$2"
+	tmpdir="$(mktemp -d "${TMPDIR:-/var/tmp}/pal-XXXXXXXX")" # Thanks to James Ainslie
+	tempfile="${tmpdir}/temp.mkv"
+
+	echo Input: "$infile"
+	echo Output: "$outfile"
+	echo
+
+	# Start processing of the source file
+	confirm_overwrite "$outfile"
+	fix_chapters
+	get_sync_flags "$infile"
+
+	# For each video track, adjust the framerate by the correction factor. (No
+	# re-encoding necessary!) Adjust subtitle timings to match. Add the adjusted
+	# chapters from the new chapter file. Write everything to a temp file.
+	mkvmerge --output "$tempfile" $syncstring --no-chapters $chapter_string "$infile"
+
+	fix_audio
+	cleanup
+else
+	echo ${USAGE}
+	exit
+fi
