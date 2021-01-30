@@ -145,20 +145,25 @@ if [ $# == 1 ] && [ -d "$1" ]; then
 	# Loop through files in folder
 	for file in "$1"/*
 	do
-		# Source & dest files
-		infile="$(echo $file)"
-		outfile="${infile::-4} - FIXED.mkv"
-		tmpdir="$(mktemp -d "${TMPDIR:-/var/tmp}/pal-XXXXXXXX")" # Thanks to James Ainslie
-		tempfile="${tmpdir}/temp.mkv"
+                # Source & dest files
+                infile="$(echo $file)"
+                outpath="$(dirname "${infile}")/Fixed"
+                outname="$(basename "${infile}")"
+                outfile="$(echo $outpath)/$(echo $outname)"
+                tmpdir="$(mktemp -d "${TMPDIR:-/var/tmp}/pal-XXXXXXXX")" # Thanks to James Ainslie
+                tempfile="${tmpdir}/temp.mkv"
 
-		echo Input: "$infile"
-		echo Output: "$outfile"
-		echo
+                echo Input: "$infile"
+                echo Output: "$outfile"
+                echo
 
-		# Start processing of the source file
-		confirm_overwrite "$outfile"
-		fix_chapters
-		get_sync_flags "$infile"
+                # Create output directory, if it does not exist
+                mkdir -p "$outpath"
+
+                # Start processing of the source file
+                confirm_overwrite "$outfile"
+                fix_chapters
+                get_sync_flags "$infile"
 
 		# For each video track, adjust the framerate by the correction factor. (No
 		# re-encoding necessary!) Adjust subtitle timings to match. Add the adjusted
