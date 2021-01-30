@@ -147,13 +147,18 @@ if [ $# == 1 ] && [ -d "$1" ]; then
 	do
 		# Source & dest files
 		infile="$(echo $file)"
-		outfile="${infile::-4} - FIXED.mkv"
+		outpath="$(dirname "${infile}")/Fixed"
+		outname="$(basename "${infile}")"
+		outfile="$(echo $outpath)/$(echo $outname)"
 		tmpdir="$(mktemp -d "${TMPDIR:-/var/tmp}/pal-XXXXXXXX")" # Thanks to James Ainslie
 		tempfile="${tmpdir}/temp.mkv"
 
 		echo Input: "$infile"
 		echo Output: "$outfile"
 		echo
+
+		# Create output directory, if it does not exist
+		mkdir -p "$outpath"
 
 		# Start processing of the source file
 		confirm_overwrite "$outfile"
